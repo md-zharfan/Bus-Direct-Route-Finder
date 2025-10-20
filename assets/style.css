@@ -1,0 +1,162 @@
+
+/* ===========================
+   Modern Dolch 2 — style.css
+   =========================== */
+:root {
+  --bg: #1e1f22;              /* charcoal */
+  --bg2: #17181b;             /* deeper charcoal */
+  --panel: #242529;           /* card/panel */
+  --panel2: #2b2d31;          /* alternate panel */
+  --border: #3a3b3f;          /* subtle border */
+  --text: #E6E6E6;            /* primary text */
+  --muted: #9aa0a6;           /* secondary text */
+  --accent: #59C3C3;          /* cyan accent */
+  --accent2: #FF6BA3;         /* pink accent (glow) */
+}
+
+/* ---------- Background / Layout ---------- */
+[data-testid="stAppViewContainer"] > .main {
+  background: linear-gradient(180deg, var(--bg), var(--bg2) 60%);
+}
+[data-testid="stHeader"] { background: transparent; }
+.block-container { padding-top: 1.8rem; }
+
+/* ---------- Typography ---------- */
+h1, h2, h3, h4 { color: var(--text); letter-spacing: .3px; }
+h1 { margin-bottom: .5rem; }
+
+/* ---------- Tabs: Futuristic Rounded Buttons ---------- */
+[data-testid="stTabs"] [role="tablist"] {
+  gap: .5rem;
+  border: 0;
+  justify-content: center;
+}
+[data-testid="stTabs"] button[role="tab"] {
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 9999px; /* full pill */
+  padding: .5rem 1rem;
+  transition: all .18s ease;
+  box-shadow: inset 0 -2px 0 rgba(255,255,255,.03);
+  font-weight: 500;
+}
+[data-testid="stTabs"] button[role="tab"]:hover {
+  color: var(--text);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 24px rgba(0,0,0,.35);
+}
+
+/* --- Active Tab Neon Glow --- */
+[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+  color: var(--text) !important;
+  border-color: transparent;
+  background:
+    radial-gradient(120% 100% at 50% 0%, rgba(255,255,255,.06), rgba(255,255,255,.03)),
+    linear-gradient(135deg, var(--accent2) 0%, var(--accent) 100%);
+  box-shadow:
+    0 0 15px 2px rgba(255,107,163,.7),
+    0 0 25px 5px rgba(255,107,163,.45),
+    inset 0 1px 2px rgba(255,255,255,.15),
+    0 6px 20px rgba(0,0,0,.4);
+  transform: translateY(-1px);
+  animation: pulse 2.5s ease-in-out infinite;
+}
+
+/* --- Pulse Animation --- */
+@keyframes pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 15px 2px rgba(255,107,163,.5),
+      0 0 25px 4px rgba(255,107,163,.3),
+      inset 0 1px 2px rgba(255,255,255,.15),
+      0 6px 20px rgba(0,0,0,.4);
+  }
+  50% {
+    box-shadow:
+      0 0 25px 4px rgba(255,107,163,.85),
+      0 0 40px 8px rgba(255,107,163,.55),
+      inset 0 1px 2px rgba(255,255,255,.15),
+      0 6px 20px rgba(0,0,0,.4);
+  }
+}
+
+/* ---------- Primary Buttons ---------- */
+.stButton > button {
+  background: linear-gradient(180deg, var(--accent), #3aa9a9);
+  color: #0d1117;
+  border: none;
+  border-radius: 12px;
+  padding: .55rem 1rem;
+  font-weight: 600;
+  transition: transform .15s ease, filter .15s ease, box-shadow .15s ease;
+  box-shadow: 0 6px 16px rgba(0,0,0,.35);
+}
+.stButton > button:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px rgba(0,0,0,.45);
+}
+
+/* ---------- Inputs / Selects ---------- */
+.stSelectbox > div > div,
+.stTextInput > div > div,
+.stNumberInput > div > div,
+.stDateInput > div > div,
+.stMultiSelect > div > div {
+  background: var(--panel);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+/* ---------- Sidebar (if used) ---------- */
+.css-1d391kg, /* old class guard */
+[data-testid="stSidebar"] {
+  background: var(--panel2) !important;
+  border-right: 1px solid var(--border);
+}
+
+/* ---------- DataFrame / Table ---------- */
+[data-testid="stDataFrame"] {
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid #303236;
+}
+[data-testid="stDataFrame"] .row-widget { background: var(--panel); }
+
+/* ---------- Expander ---------- */
+.streamlit-expanderHeader {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.streamlit-expanderContent {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+}
+
+/* ---------- Alerts / Info boxes ---------- */
+.stAlert {
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+
+/* ---------- Captions ---------- */
+.block-container .stMarkdown p,
+.block-container .stCaption, .stCaption, .st-emotion-cache-q8sbsg {
+  color: var(--muted) !important;
+}
+
+/* ---------- Code Blocks ---------- */
+.stCodeBlock, pre, code {
+  background: var(--panel2) !important;
+  color: var(--text) !important;
+  border-radius: 10px !important;
+  border: 1px solid var(--border) !important;
+}
+
+/* ---------- Small utility tweaks ---------- */
+hr { border-color: var(--border); opacity: .5; }

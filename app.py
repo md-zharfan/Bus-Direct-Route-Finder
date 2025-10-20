@@ -3,119 +3,13 @@ import os
 import sqlite3
 import pandas as pd
 import streamlit as st
+from pathlib import Path
 
-# ---------- Custom Modern Dolch 2 Theme CSS ----------
-st.markdown("""
-<style>
-:root {
-  --bg: #1e1f22;
-  --panel: #242529;
-  --panel2: #2b2d31;
-  --text: #E6E6E6;
-  --muted: #9aa0a6;
-  --accent: #59C3C3;   /* Cyan accent */
-  --accent2: #FF6BA3;  /* Pink glow accent */
-}
-
-/* ---------- Background ---------- */
-[data-testid="stAppViewContainer"] > .main {
-  background: linear-gradient(180deg, var(--bg), #17181b 60%);
-}
-[data-testid="stHeader"] { background: transparent; }
-.block-container { padding-top: 1.8rem; }
-
-/* ---------- Titles ---------- */
-h1 {
-  letter-spacing: .3px;
-  margin-bottom: .5rem;
-}
-
-/* ---------- Tabs: Futuristic Rounded Buttons ---------- */
-[data-testid="stTabs"] [role="tablist"] {
-  gap: .5rem;
-  border: 0;
-  justify-content: center;
-}
-[data-testid="stTabs"] button[role="tab"] {
-  background: var(--panel);
-  color: var(--muted);
-  border: 1px solid #3a3b3f;
-  border-radius: 9999px; /* full pill shape */
-  padding: .5rem 1rem;
-  transition: all .18s ease;
-  box-shadow: inset 0 -2px 0 rgba(255,255,255,.03);
-  font-weight: 500;
-}
-
-/* --- Active Tab Glow --- */
-[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
-  color: var(--text)!important;
-  border-color: transparent;
-  background:
-    radial-gradient(120% 100% at 50% 0%, rgba(255,255,255,.06), rgba(255,255,255,.03)),
-    linear-gradient(135deg, var(--accent2) 0%, var(--accent) 100%);
-  box-shadow:
-    0 0 15px 2px rgba(255,107,163,.7),
-    0 0 25px 5px rgba(255,107,163,.45),
-    inset 0 1px 2px rgba(255,255,255,.15),
-    0 6px 20px rgba(0,0,0,.4);
-  transform: translateY(-1px);
-  animation: pulse 2.5s ease-in-out infinite;
-}
-
-/* --- Pulse Animation for Active Tab --- */
-@keyframes pulse {
-  0%, 100% {
-    box-shadow:
-      0 0 15px 2px rgba(255,107,163,.5),
-      0 0 25px 4px rgba(255,107,163,.3);
-  }
-  50% {
-    box-shadow:
-      0 0 25px 4px rgba(255,107,163,.85),
-      0 0 40px 8px rgba(255,107,163,.55);
-  }
-}
-
-/* --- Hover Effect --- */
-[data-testid="stTabs"] button[role="tab"]:hover {
-  color: var(--text);
-  transform: translateY(-1px);
-  box-shadow: 0 8px 24px rgba(0,0,0,.35);
-}
-
-/* ---------- Buttons ---------- */
-.stButton > button {
-  background: linear-gradient(180deg, var(--accent), #3aa9a9);
-  color: #0d1117;
-  border: none;
-  border-radius: 12px;
-  padding: .55rem 1rem;
-  font-weight: 600;
-  transition: transform .15s ease, filter .15s ease;
-}
-.stButton > button:hover {
-  filter: brightness(1.08);
-  transform: translateY(-1px);
-}
-
-/* ---------- Inputs ---------- */
-.stSelectbox > div > div,
-.stTextInput > div > div {
-  background: var(--panel);
-  border-radius: 12px;
-  border: 1px solid #3a3b3f;
-  color: var(--text);
-}
-
-/* ---------- DataFrame Container ---------- */
-[data-testid="stDataFrame"] {
-  border-radius: 12px;
-  overflow: hidden;
-  border: 1px solid #303236;
-}
-</style>
-""", unsafe_allow_html=True)
+css_path = Path("assets/style.css")
+if css_path.exists():
+    st.markdown(f"<style>{css_path.read_text()}</style>", unsafe_allow_html=True)
+else:
+    st.warning("⚠️ CSS file not found — UI may not render properly.")
 
 DB_PATH = os.environ.get("BUS_DB_PATH", "bus.db")
 
