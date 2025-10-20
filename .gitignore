@@ -1,0 +1,23 @@
+# ---- Python ----
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+
+# ---- Data / Generated ----
+data/raw/
+data/fares/
+*.csv
+*.parquet
+*.json
+
+# ---- Secrets ----
+.env
+
+# ---- OS / IDE ----
+.DS_Store
+Thumbs.db
+.vscode/
