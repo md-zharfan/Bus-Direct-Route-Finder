@@ -1,0 +1,7 @@
+# .streamlit/config.toml
+[theme]
+base = "dark"
+primaryColor = "#59C3C3"            # Dolch cyan/teal accent
+backgroundColor = "#1e1f22"         # dark charcoal
+secondaryBackgroundColor = "#242529"# panel grey
+textColor = "#E6E6E6"               # warm light grey
