@@ -1,0 +1,40 @@
+import requests, json, time
+from pathlib import Path
+
+API_KEY = "adosg9WZQKSV9F9cQLpNJg=="
+RAW_DIR = Path("data/raw"); RAW_DIR.mkdir(parents=True, exist_ok=True)
+
+ENDPOINTS = {
+    "BusStops":   "https://datamall2.mytransport.sg/ltaodataservice/BusStops",
+    "BusServices":"https://datamall2.mytransport.sg/ltaodataservice/BusServices",
+    "BusRoutes":  "https://datamall2.mytransport.sg/ltaodataservice/BusRoutes",
+}
+
+def fetch_all(name, url):
+    all_data, skip = [], 0
+    while True:
+        full = f"{url}?$skip={skip}"
+        ok = False
+        for attempt in range(6):
+            r = requests.get(full, headers={"AccountKey": API_KEY, "accept": "application/json"}, timeout=30)
+            if r.status_code == 200:
+                ok = True
+                break
+            time.sleep(0.8 * (attempt + 1))  # backoff
+        if not ok:
+            raise RuntimeError(f"{name} failed @skip={skip}: {r.status_code} {r.text[:200]}")
+        chunk = r.json().get("value", [])
+        if not chunk:
+            break
+        all_data.extend(chunk)
+        skip += 500
+        time.sleep(0.25)  # be nice to the API
+        if skip % 5000 == 0:
+            print(f"{name}: {len(all_data)} rows so far...")
+    path = RAW_DIR / f"{name}.json"
+    path.write_text(json.dumps({"value": all_data}, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Saved {name}: {len(all_data)} rows -> {path}")
+
+if __name__ == "__main__":
+    for n, u in ENDPOINTS.items():
+        fetch_all(n, u)

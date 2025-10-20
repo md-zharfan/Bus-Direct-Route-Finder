@@ -1,0 +1,364 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import json
+import sqlite3
+import re
+from pathlib import Path
+import pandas as pd
+
+# ---------- Paths ----------
+RAW_DIR   = Path("data/raw")
+FARES_DIR = Path("data/fares")   # change if needed
+DB_PATH   = Path("bus.db")
+
+# ---------- Helpers ----------
+def _to_number(x):
+    if pd.isna(x): return None
+    if isinstance(x, (int, float)): return float(x)
+    s = re.sub(r"[^0-9.\-]", "", str(x))
+    try: return float(s)
+    except: return None
+
+def _find_col(df: pd.DataFrame, tokens):
+    low = {c: c.lower() for c in df.columns}
+    for c, l in low.items():
+        if all(t in l for t in tokens):
+            return c
+    return None
+
+def _find_any(df: pd.DataFrame, token_sets):
+    for toks in token_sets:
+        c = _find_col(df, toks)
+        if c: return c
+    return None
+
+# ---------- Load core JSONs ----------
+def read_lta_json(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        raise FileNotFoundError(f"Missing {path}")
+    with path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    if isinstance(data, dict) and "value" in data:
+        return pd.DataFrame(data["value"])
+    if isinstance(data, list):
+        return pd.DataFrame(data)
+    raise ValueError(f"Unexpected JSON structure in {path.name}")
+
+def load_core_frames():
+    stops_df = read_lta_json(RAW_DIR/"BusStops.json").rename(columns={
+        "BusStopCode":"bus_stop_code","RoadName":"road_name",
+        "Description":"description","Latitude":"lat","Longitude":"lng"
+    })[["bus_stop_code","road_name","description","lat","lng"]]
+
+    services_df = read_lta_json(RAW_DIR/"BusServices.json").rename(columns={
+        "ServiceNo":"service_no","Direction":"direction","Operator":"operator",
+        "Category":"category","OriginCode":"origin_code","DestinationCode":"destination_code"
+    })[["service_no","direction","operator","category","origin_code","destination_code"]]
+    services_df["category"] = services_df["category"].astype(str).str.upper().str.strip()
+
+    routes_df = read_lta_json(RAW_DIR/"BusRoutes.json").rename(columns={
+        "ServiceNo":"service_no","Direction":"direction","StopSequence":"stop_sequence",
+        "BusStopCode":"bus_stop_code","Distance":"distance_km"
+    })[["service_no","direction","stop_sequence","bus_stop_code","distance_km"]]
+    routes_df["direction"] = pd.to_numeric(routes_df["direction"], errors="coerce").astype("Int64")
+    routes_df["stop_sequence"] = pd.to_numeric(routes_df["stop_sequence"], errors="coerce").astype("Int64")
+    routes_df["distance_km"] = pd.to_numeric(routes_df["distance_km"], errors="coerce")
+
+    return stops_df, services_df, routes_df
+
+# ---------- Fare column detection ----------
+def _detect_fare_columns(df: pd.DataFrame) -> dict:
+    L = lambda *toks: list(toks)
+    return {
+        "adult_card":    _find_any(df, [L("adult","card","fare"), L("adult","card","cents"), L("adult","fare")]),
+        "adult_cash":    _find_any(df, [L("adult","cash","fare"), L("adult","cash","cents"), L("cash","adult")]),
+        "senior_card":   _find_any(df, [L("senior","card","fare"), L("senior","card","cents"), L("senior","fare")]),
+        "senior_cash":   _find_any(df, [L("senior","cash","fare"), L("senior","cash","cents"), L("cash","senior")]),
+        "student_card":  _find_any(df, [L("student","card","fare"), L("student","card","cents"), L("student","fare"), L("nsmen","card","fare")]),
+        "student_cash":  _find_any(df, [L("student","cash","fare"), L("student","cash","cents"), L("cash","student"), L("nsmen","cash")]),
+        "workfare_card": _find_any(df, [L("workfare","card","fare"), L("wtc","card","fare"), L("workfare","fare")]),
+        "workfare_cash": _find_any(df, [L("workfare","cash"), L("wtc","cash")]),
+    }
+
+def _extract_fares(row: pd.Series, cols: dict) -> dict:
+    out = {}
+    for key, col in cols.items():
+        out[key] = int(_to_number(row[col])) if col and col in row and _to_number(row[col]) is not None else None
+    return out
+
+# ---------- Parse TRUNK bands (multiple layouts) ----------
+def _parse_trunk_bands(df: pd.DataFrame, filename: str) -> pd.DataFrame:
+    cols = _detect_fare_columns(df)
+    if not any(cols.values()):
+        raise ValueError(f"{filename}: couldn't find any fare columns")
+
+    bands = []
+
+    # Layout A: From/To (km)
+    from_col = _find_any(df, [["from","km"],["min","km"],["from"]])
+    to_col   = _find_any(df, [["to","km"],  ["max","km"],["to"]])
+    if from_col and to_col:
+        for _, r in df.iterrows():
+            mn = _to_number(r.get(from_col)); mx = _to_number(r.get(to_col))
+            if mn is None or mx is None: continue
+            fares = _extract_fares(r, cols)
+            bands.append({"category":"TRUNK","min_km":mn,"max_km":mx, **fares})
+
+    # Layout B: Up to (km)
+    if not bands:
+        up_col = _find_any(df, [["up","to","km"],["upto","km"],["up","km"]])
+        if up_col:
+            tmp = df.copy()
+            tmp["ub"] = tmp[up_col].map(_to_number)
+            tmp = tmp.dropna(subset=["ub"]).sort_values("ub")
+            prev = 0.0
+            for _, r in tmp.iterrows():
+                fares = _extract_fares(r, cols)
+                bands.append({"category":"TRUNK","min_km":prev+1e-6,"max_km":float(r["ub"]), **fares})
+                prev = float(r["ub"])
+
+    # Layout C: Text range "0 – 3.2 km" OR single number per row = upper bound
+    if not bands:
+        rng_col = _find_any(df, [["distance","band"],["distance"],["km"]]) or df.columns[0]
+        patt = re.compile(r"(\d+(?:\.\d+)?)\s*(?:-|–|to)\s*(\d+(?:\.\d+)?)")
+        prev_ub = 0.0
+        for _, r in df.iterrows():
+            fares = _extract_fares(r, cols)
+            txt = str(r.get(rng_col, ""))
+            m = patt.search(txt)
+            if m:
+                mn = float(m.group(1)); mx = float(m.group(2))
+                bands.append({"category":"TRUNK","min_km":mn,"max_km":mx, **fares})
+            else:
+                ub = _to_number(txt)
+                if ub is not None:
+                    bands.append({"category":"TRUNK","min_km":prev_ub+1e-6,"max_km":ub, **fares})
+                    prev_ub = ub
+
+    if not bands:
+        raise ValueError(f"{filename}: couldn't parse trunk distance bands")
+
+    out = pd.DataFrame(bands)
+    out = out[out["min_km"] <= out["max_km"]].copy()
+    if not out.empty:
+        idx = out["max_km"].idxmax()
+        out.loc[idx, "max_km"] = max(out.loc[idx, "max_km"], 999.0)
+    return out
+
+# ---------- Load fares (Feeder/Express flat; Trunk banded) ----------
+def load_fare_bands() -> pd.DataFrame:
+    files = {
+        "FEEDER":"FaresforFeederBusServicesCentsEffectivefrom28December2024.csv",
+        "EXPRESS":"FaresforExpressBusServicesCentsEffectivefrom28December2024.csv",
+        "TRUNK":"FaresforTrunkBusServicesCentsEffectivefrom28December2024.csv",
+    }
+    frames = []
+
+    # Feeder flat
+    p = FARES_DIR / files["FEEDER"]
+    if p.exists():
+        df = pd.read_csv(p)
+        cols = _detect_fare_columns(df)
+        row = df.iloc[0]  # single flat record
+        fares = _extract_fares(row, cols)
+        frames.append(pd.DataFrame([{"category":"FEEDER","min_km":0.0,"max_km":999.0, **fares}]))
+
+    # Express flat
+    p = FARES_DIR / files["EXPRESS"]
+    if p.exists():
+        df = pd.read_csv(p)
+        cols = _detect_fare_columns(df)
+        row = df.iloc[0]
+        fares = _extract_fares(row, cols)
+        frames.append(pd.DataFrame([{"category":"EXPRESS","min_km":0.0,"max_km":999.0, **fares}]))
+
+    # Trunk banded
+    p = FARES_DIR / files["TRUNK"]
+    if p.exists():
+        df = pd.read_csv(p)
+        frames.append(_parse_trunk_bands(df, p.name))
+
+    if frames:
+        out = pd.concat(frames, ignore_index=True)
+
+        # 🔧 Normalize column names to match SQLite schema (…_cents)
+        rename_map = {
+            "adult_card": "adult_card_cents",
+            "adult_cash": "adult_cash_cents",
+            "senior_card": "senior_card_cents",
+            "senior_cash": "senior_cash_cents",
+            "student_card": "student_card_cents",
+            "student_cash": "student_cash_cents",
+            "workfare_card": "workfare_card_cents",
+            "workfare_cash": "workfare_cash_cents",
+        }
+        out = out.rename(columns=rename_map)
+
+        # Ensure Int64 for cents columns (nullable int)
+        for col in [c for c in out.columns if c.endswith("_cents")]:
+            out[col] = out[col].astype("Int64")
+
+        return out
+
+    # Fallback empty frame
+    cols = [
+        "category","min_km","max_km",
+        "adult_card_cents","adult_cash_cents",
+        "senior_card_cents","senior_cash_cents",
+        "student_card_cents","student_cash_cents",
+        "workfare_card_cents","workfare_cash_cents"
+    ]
+    return pd.DataFrame(columns=cols)
+
+# ---------- DB ----------
+def init_sqlite():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.executescript("""
+    DROP TABLE IF EXISTS fare_bands;
+    DROP TABLE IF EXISTS route_stops;
+    DROP TABLE IF EXISTS services;
+    DROP TABLE IF EXISTS stops;
+
+    CREATE TABLE stops(
+      bus_stop_code TEXT PRIMARY KEY,
+      road_name TEXT, description TEXT, lat REAL, lng REAL
+    );
+
+    CREATE TABLE services(
+      service_no TEXT, direction INTEGER, operator TEXT, category TEXT,
+      origin_code TEXT, destination_code TEXT,
+      PRIMARY KEY(service_no, direction)
+    );
+
+    CREATE TABLE route_stops(
+      service_no TEXT, direction INTEGER, stop_sequence INTEGER,
+      bus_stop_code TEXT, distance_km REAL,
+      PRIMARY KEY(service_no, direction, stop_sequence)
+    );
+
+    CREATE TABLE fare_bands(
+      category TEXT,
+      min_km REAL, max_km REAL,
+      adult_card_cents   INTEGER, adult_cash_cents   INTEGER,
+      senior_card_cents  INTEGER, senior_cash_cents  INTEGER,
+      student_card_cents INTEGER, student_cash_cents INTEGER,
+      workfare_card_cents INTEGER, workfare_cash_cents INTEGER
+    );
+    """)
+    conn.commit()
+    return conn
+
+def bulk_load(conn, stops, services, routes, fares):
+    stops.to_sql("stops", conn, if_exists="append", index=False)
+    services.to_sql("services", conn, if_exists="append", index=False)
+    routes.to_sql("route_stops", conn, if_exists="append", index=False)
+    if not fares.empty:
+        fares.to_sql("fare_bands", conn, if_exists="append", index=False)
+    conn.commit()
+
+# ---------- Query with rider type + mode, fallback + source label ----------
+DIRECT_SQL = """
+WITH trips AS (
+  SELECT rs_from.service_no, rs_from.direction, s.operator, s.category,
+         LOWER(?) AS rider_type, LOWER(?) AS pay_mode,
+         ? AS from_stop, ? AS to_stop,
+         (rs_to.stop_sequence - rs_from.stop_sequence) AS hops,
+         ROUND(rs_to.distance_km - rs_from.distance_km, 2) AS travel_km,
+         ROUND(
+           CASE WHEN (rs_to.distance_km - rs_from.distance_km) > 0
+                THEN 3.2 * (rs_to.distance_km - rs_from.distance_km)
+                ELSE 5.5 * (rs_to.stop_sequence - rs_from.stop_sequence)
+           END
+         ) AS est_minutes
+  FROM route_stops rs_from
+  JOIN route_stops rs_to
+    ON rs_to.service_no = rs_from.service_no
+   AND rs_to.direction  = rs_from.direction
+   AND rs_to.stop_sequence > rs_from.stop_sequence
+  JOIN services s
+    ON s.service_no = rs_from.service_no
+   AND s.direction  = rs_from.direction
+  WHERE rs_from.bus_stop_code = ?
+    AND rs_to.bus_stop_code   = ?
+),
+picked AS (
+  SELECT t.*,
+         CASE
+           WHEN rider_type='adult'    AND pay_mode='card' THEN fb.adult_card_cents
+           WHEN rider_type='adult'    AND pay_mode='cash' THEN COALESCE(fb.adult_cash_cents,   fb.adult_card_cents)
+           WHEN rider_type='senior'   AND pay_mode='card' THEN fb.senior_card_cents
+           WHEN rider_type='senior'   AND pay_mode='cash' THEN COALESCE(fb.senior_cash_cents,  fb.senior_card_cents)
+           WHEN rider_type='student'  AND pay_mode='card' THEN fb.student_card_cents
+           WHEN rider_type='student'  AND pay_mode='cash' THEN COALESCE(fb.student_cash_cents, fb.student_card_cents)
+           WHEN rider_type='workfare' AND pay_mode='card' THEN fb.workfare_card_cents
+           WHEN rider_type='workfare' AND pay_mode='cash' THEN COALESCE(fb.workfare_cash_cents,fb.workfare_card_cents)
+           ELSE fb.adult_card_cents
+         END AS fare_cents,
+
+         CASE
+           WHEN rider_type='adult'    AND pay_mode='card' THEN 'adult_card'
+           WHEN rider_type='adult'    AND pay_mode='cash' THEN CASE WHEN fb.adult_cash_cents     IS NOT NULL THEN 'adult_cash'     ELSE 'adult_card' END
+           WHEN rider_type='senior'   AND pay_mode='card' THEN 'senior_card'
+           WHEN rider_type='senior'   AND pay_mode='cash' THEN CASE WHEN fb.senior_cash_cents    IS NOT NULL THEN 'senior_cash'    ELSE 'senior_card' END
+           WHEN rider_type='student'  AND pay_mode='card' THEN 'student_card'
+           WHEN rider_type='student'  AND pay_mode='cash' THEN CASE WHEN fb.student_cash_cents   IS NOT NULL THEN 'student_cash'   ELSE 'student_card' END
+           WHEN rider_type='workfare' AND pay_mode='card' THEN 'workfare_card'
+           WHEN rider_type='workfare' AND pay_mode='cash' THEN CASE WHEN fb.workfare_cash_cents  IS NOT NULL THEN 'workfare_cash'  ELSE 'workfare_card' END
+           ELSE 'adult_card'
+         END AS fare_source
+  FROM trips t
+  LEFT JOIN fare_bands fb
+    ON UPPER(fb.category) = UPPER(t.category)
+   AND t.travel_km >= fb.min_km
+   AND t.travel_km <= fb.max_km
+)
+SELECT
+  service_no, direction, operator, category,
+  from_stop, to_stop, hops, travel_km, est_minutes,
+  CASE WHEN fare_cents IS NOT NULL THEN '$' || printf('%.2f', fare_cents/100.0) END AS fare,
+  fare_source
+FROM picked
+ORDER BY fare, hops, travel_km;
+"""
+
+# ---------- Main ----------
+def main():
+    print("Loading core JSONs...")
+    stops, services, routes = load_core_frames()
+    print(f"Loaded: {len(stops)} stops, {len(services)} services, {len(routes)} route-stops")
+
+    print("Loading fare CSVs...")
+    fares = load_fare_bands()
+    print(f"Loaded {len(fares)} fare bands")
+
+    conn = init_sqlite()
+    bulk_load(conn, stops, services, routes, fares)
+
+    # sanity
+    for t in ("stops","services","route_stops","fare_bands"):
+        n = pd.read_sql_query(f"SELECT COUNT(*) n FROM {t}", conn).iloc[0,0]
+        print(f"{t}: {n}")
+
+    print("\nEnter blank to quit.")
+    while True:
+        rider = (input("\nRider type (adult/senior/student/workfare) [adult]: ").strip().lower() or "adult")
+        mode  = (input("Payment mode (card/cash) [card]: ").strip().lower() or "card")
+        frm = input("FROM stop code: ").strip()
+        if not frm: break
+        to  = input("TO stop code: ").strip()
+        if not to: break
+
+        df = pd.read_sql_query(DIRECT_SQL, conn, params=(rider, mode, frm, to, frm, to))
+        if df.empty:
+            print("⚠️ No direct routes found.")
+        else:
+            print(f"\nShowing fares for **{rider} / {mode}** (with fallback if needed):")
+            print(df.to_string(index=False))
+
+    conn.close()
+    print("Done.")
+
+if __name__ == "__main__":
+    main()

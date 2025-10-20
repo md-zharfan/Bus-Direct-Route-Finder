@@ -1,0 +1,35 @@
+# suggest_pairs.py
+import sqlite3, pandas as pd
+
+conn = sqlite3.connect("bus.db")
+
+# Show table sizes so we know what we have
+for t in ("stops","services","route_stops"):
+    n = pd.read_sql_query(f"SELECT COUNT(*) AS n FROM {t};", conn).iloc[0,0]
+    print(f"{t}: {n}")
+
+print("\nFinding some direct pairs (consecutive stops on same service/direction)...")
+sql = """
+SELECT rs1.bus_stop_code AS from_code,
+       rs2.bus_stop_code AS to_code,
+       rs1.service_no,
+       rs1.direction,
+       rs1.stop_sequence AS from_seq,
+       rs2.stop_sequence AS to_seq
+FROM route_stops rs1
+JOIN route_stops rs2
+  ON rs2.service_no  = rs1.service_no
+ AND rs2.direction   = rs1.direction
+ AND rs2.stop_sequence = rs1.stop_sequence + 1
+LIMIT 20;
+"""
+pairs = pd.read_sql_query(sql, conn)
+if pairs.empty:
+    print("No pairs found. Your route_stops table is likely incomplete.")
+else:
+    print(pairs)
+    ex = pairs.iloc[0]
+    print("\nTry this in BDR_full.py when prompted:")
+    print(f"FROM: {ex['from_code']}   TO: {ex['to_code']}   (service {ex['service_no']} dir {int(ex['direction'])})")
+
+conn.close()
