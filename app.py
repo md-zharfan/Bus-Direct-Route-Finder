@@ -120,7 +120,6 @@ def query_direct(conn, rider, mode, from_code, to_code):
 # ---------- streamlit ui ----------
 st.set_page_config(page_title="Bus Route & Arrivals Demo", layout="centered")
 st.title("Bus Route & Arrivals Demo")
-st.caption("Integrated SQL view · combining route and simulated arrival info")
 
 # divider
 st.markdown(
