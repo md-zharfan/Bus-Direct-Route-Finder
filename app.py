@@ -5,13 +5,16 @@ import pandas as pd
 import streamlit as st
 from pathlib import Path
 
+# load css if present
 css_path = Path("assets/style.css")
 if css_path.exists():
     st.markdown(f"<style>{css_path.read_text()}</style>", unsafe_allow_html=True)
 else:
     st.warning("⚠️ CSS file not found — UI may not render properly.")
 
+# config
 DB_PATH = os.environ.get("BUS_DB_PATH", "bus.db")
+# !!add config for mongo here!!
 
 DIRECT_SQL = """
 WITH trips AS (
@@ -108,73 +111,126 @@ def query_direct(conn, rider, mode, from_code, to_code):
     df = pd.read_sql_query(DIRECT_SQL, conn, params=params)
     return df
 
-def main():
-    st.set_page_config(page_title="Bus Direct Route Finder", layout="centered")
-    st.title("Bus Route & Arrivals Demo")
+# add your nosql functions here, for example
 
-    tab_sql, tab_nosql = st.tabs(["🚌 Direct Route Finder (SQL)", "⏱️ Live Arrivals (NoSQL)"])
+# !!def get_mongo_client()!!
 
-    with tab_sql:
-        st.subheader("Find direct services between two stops")
-        conn = get_conn()
-        stops = load_stops()
+# !!def fetch_arrivals()!!
 
-        col1, col2 = st.columns(2)
-        rider = col1.selectbox("Rider type", ["adult", "senior", "student", "workfare"], index=0)
-        mode  = col2.selectbox("Payment mode", ["card", "cash"], index=0)
+# ---------- streamlit ui ----------
+st.set_page_config(page_title="Bus Route & Arrivals Demo", layout="centered")
+st.title("Bus Route & Arrivals Demo")
+st.caption("Integrated SQL view · combining route and simulated arrival info")
 
-        # Inputs with autocomplete
-        col3, col4 = st.columns(2)
-        start_label = col3.selectbox("From stop", stops["label"].tolist())
-        end_label   = col4.selectbox("To stop",   stops["label"].tolist(), index=min(1, len(stops)-1))
+# divider
+st.markdown(
+    '<hr style="border:0;height:1px;background:linear-gradient(90deg,transparent,#FF6BA3,transparent);margin:1rem 0;">',
+    unsafe_allow_html=True
+)
 
-        # Extract codes back
-        start_code = start_label.split(" — ", 1)[0]
-        end_code   = end_label.split(" — ", 1)[0]
+# --- section 1: direct route finder (SQL) ---
+st.subheader("🚌 Direct Route Finder (SQL)")
+conn = get_conn()
+stops = load_stops()
 
-        if st.button("Search direct routes"):
-            with st.spinner("Querying..."):
-                df = query_direct(conn, rider, mode, start_code, end_code)
-            if df.empty:
-                st.warning("No direct routes found. Try another pair.")
-            else:
-                # tidy columns
-                df = df.rename(columns={
-                    "service_no":"Service",
-                    "direction":"Dir",
-                    "operator":"Operator",
-                    "category":"Category",
-                    "from_stop":"From",
-                    "to_stop":"To",
-                    "hops":"Hops",
-                    "travel_km":"Km",
-                    "est_minutes":"ETA (min)",
-                    "fare":"Fare",
-                    "fare_source":"Fare source"
-                })
-                st.dataframe(df, use_container_width=True)
+c1, c2 = st.columns(2)
+rider = c1.selectbox("Rider type", ["adult", "senior", "student", "workfare"])
+mode = c2.selectbox("Payment mode", ["card", "cash"])
 
-        with st.expander("Advanced"):
-            st.caption("DB path: " + os.path.abspath(DB_PATH))
-            st.write("Tables:", pd.read_sql_query(
-                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", conn
-            ))
+c3, c4 = st.columns(2)
+from_stop = c3.selectbox("From stop", stops["label"].tolist())
+to_stop = c4.selectbox("To stop", stops["label"].tolist(), index=min(1, len(stops)-1))
+from_code = from_stop.split(" — ", 1)[0]
+to_code = to_stop.split(" — ", 1)[0]
 
-    with tab_nosql:
-        st.subheader("Live arrivals at a stop")
-        st.info("Hook this up to MongoDB later. For now, we’ll show a simulated response shape.")
-        st.code(
-            """{
-  "stop_id": "ST200",
-  "route_no": "21",
-  "updated_at": "2025-09-18T09:15:00Z",
-  "arrivals": [ {"eta_min": 3, "status": "on-time"}, {"eta_min": 11} ],
-  "alerts":   [ {"type": "crowd", "msg": "High load"} ]
-}""",
-            language="json"
+if st.button("Search direct routes"):
+    with st.spinner("Querying database..."):
+        df = query_direct(conn, rider, mode, from_code, to_code)
+    if df.empty:
+        st.warning("No direct routes found.")
+    else:
+        # === after you compute df (non-empty) in the SQL section ===
+        best_fare = df["fare"].str.replace("$","").astype(float).min()
+        best_eta  = df["est_minutes"].min()
+        services  = df["service_no"].nunique()
+        operators = df["operator"].nunique()
+
+        st.markdown(
+            f"""
+            <div class="kpi-row">
+            <div class="kpi-card">
+                <div class="label">Direct services</div>
+                <div class="value">{services}</div>
+            </div>
+            <div class="kpi-card">
+                <div class="label">Cheapest fare</div>
+                <div class="value">${best_fare:.2f}</div>
+            </div>
+            <div class="kpi-card">
+                <div class="label">Fastest ETA</div>
+                <div class="value">{best_eta} min</div>
+            </div>
+            <div class="kpi-card">
+                <div class="label">Operators</div>
+                <div class="value">{operators}</div>
+            </div>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
-        st.caption("Planned: connect with pymongo, TTL index on updated_at, and a dropdown to pick stop_id.")
-        st.caption("Tip: read MONGO_URI from .env and only enable this tab if it’s set.")
-        
-if __name__ == "__main__":
-    main()
+
+        # context chips
+        st.markdown(
+            f"""
+            <div class="meta-row">
+            <div class="chip"><span class="tag">From</span>{from_code}</div>
+            <div class="chip"><span class="tag">To</span>{to_code}</div>
+            <div class="chip"><span class="tag">Rider</span>{rider}</div>
+            <div class="chip"><span class="tag">Mode</span>{mode}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        df = df.drop(columns=["category"], errors="ignore")
+
+        df = df.rename(columns={
+            "service_no": "Service", "direction": "Dir", "operator": "Operator",
+            "from_stop": "From", "to_stop": "To",
+            "hops": "Hops", "travel_km": "Km", "est_minutes": "ETA (min)",
+            "fare": "Fare", "fare_source": "Fare source"
+        })
+        st.dataframe(df, hide_index=True, use_container_width=True)
+        # st.data_editor(df, use_container_width=True, disabled=True)
+
+# divider
+st.markdown(
+    '<hr style="border:0;height:1px;background:linear-gradient(90deg,transparent,#FF6BA3,transparent);margin:2rem 0;">',
+    unsafe_allow_html=True
+)
+
+# --- section 2: live arrivals placeholder (NoSQL) ---
+# !! can change code below once you connect the no sql !!
+st.subheader("⏱️ Live Arrivals (Preview)")
+st.info("This section will later connect to the NoSQL (MongoDB) database. Below is a simulated example of the data structure.")
+st.code(
+    """{
+  "stop_id": "59051",
+  "route_no": "969",
+  "updated_at": "2025-10-21T09:15:00Z",
+  "arrivals": [
+    {"eta_min": 3, "status": "on-time"},
+    {"eta_min": 12}
+  ],
+  "alerts": [{"type": "crowd", "msg": "High load"}]
+}""",
+    language="json"
+)
+st.caption("For final demo, this will show live arrivals fetched from MongoDB and merged visually with route info above.")
+
+# --- footer ---
+st.markdown(
+    '<hr style="border:0;height:1px;background:linear-gradient(90deg,transparent,#59C3C3,transparent);margin-top:2rem;">',
+    unsafe_allow_html=True
+)
+st.caption(f"Database: {os.path.abspath(DB_PATH)}")
