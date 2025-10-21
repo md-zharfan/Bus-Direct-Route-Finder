@@ -3,6 +3,9 @@
 A project to query direct bus services between two stops in Singapore
 using **LTA Datamall APIs** and **PTC fare tables**.
 
+Stack: Streamlit UI · Python · SQLite (MariaDB/MySQL-ready) · MongoDB 
+Data: LTA DataMall (BusStops/BusServices/BusRoutes + BusArrival), PTC fare CSVs
+
 ## Features
 
 -   Load bus stops, services, and routes from LTA Datamall JSON files or
@@ -20,16 +23,20 @@ using **LTA Datamall APIs** and **PTC fare tables**.
 
 ## Project Structure
 
-    bus-direct-route/
-    │── data/
-    │   ├── raw/        # LTA JSON files here (BusStops, BusServices, BusRoutes, BusArrival)
-    │   ├── fares/      # PTC fare CSVs here (Trunk, Feeder, Express)
-    │── directroute_finder.py   # Main script to run queries
-    │── fetch_lta_data.py       # Script to fetch LTA JSONs using API key
-    │── suggest_pairs.py        # (Optional) Helper to test stop pairs
-    │── bus.db                  # SQLite database (auto-generated)
-    │── requirements.txt        # Python dependencies
-    │── README.md               # This file
+repo/
+├─ app.py                      # Streamlit app (UI)
+├─ directroute_finder.py       # CLI loader + direct route query (optional)
+├─ fetch_lta_data.py           # Pulls LTA DataMall JSON to data/raw (optional)
+├─ requirements.txt            # Python deps
+├─ assets/
+│  └─ style.css                # Custom UI theme (Streamlit CSS)
+├─ .streamlit/
+│  └─ config.toml              # Global theme (optional)
+├─ data/
+│  ├─ raw/                     # BusStops.json, BusServices.json, BusRoutes.json
+│  └─ fares/                   # PTC fare CSVs (Trunk/Feeder/Express)
+├─ .env.example                # Template for secrets (e.g., LTA_API_KEY)
+└─ README.md
 
 ## Setup
 
@@ -51,12 +58,12 @@ using **LTA Datamall APIs** and **PTC fare tables**.
 
 4.  Place LTA JSONs in `data/raw/` and PTC fare CSVs in `data/fares/`.
 
-## Usage
+## Usage (Streamlit App)
 
-Run the direct route finder:
+Run the streamlit app:
 
 ``` bash
-python directroute_finder.py
+streamlit run app.py
 ```
 
 Example:
@@ -76,3 +83,40 @@ Output:
 -   LTA API key must be configured in `.env` for fetching fresh data.
 -   Fare tables are effective from 28 December 2024 (PTC release).
 -   SQLite database (`bus.db`) is auto-populated on first run.
+
+## Command Reference
+Start Streamlit
+
+``` bash
+streamlit run app.py
+```
+
+Stop Streamlit
+
+CTRL + C
+
+Activate / Deactivate venv
+
+Activate (see Setup)
+
+Deactivate:
+
+```bash
+deactivate
+```
+
+Rebuild requirements (pin versions)
+
+```bash
+pip freeze > requirements.txt
+```
+## License / Credits
+
+Data © LTA DataMall / PTC (refer to their terms).
+
+This app is for academic/demo purposes.
+
+## Authors
+
+Team: Zharfan, Eden, Kalai, Su Myat, Nayli, Xin Rong
+Module: INF2003 - Database Systems
