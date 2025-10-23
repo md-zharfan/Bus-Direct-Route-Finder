@@ -1,9 +1,10 @@
 # app.py
 import os
-import sqlite3
 import pandas as pd
 import streamlit as st
 from pathlib import Path
+import json
+from mongita import MongitaClientDisk
 
 # load css if present
 css_path = Path("assets/style.css")
@@ -14,7 +15,7 @@ else:
 
 # config
 DB_PATH = os.environ.get("BUS_DB_PATH", "bus.db")
-# !!add config for mongo here!!
+
 
 DIRECT_SQL = """
 WITH trips AS (
@@ -112,10 +113,27 @@ def query_direct(conn, rider, mode, from_code, to_code):
     return df
 
 # add your nosql functions here, for example
-
-# !!def get_mongo_client()!!
-
-# !!def fetch_arrivals()!!
+# --- NoSQL (Mongita) Setup ---
+def load_nosql_data():
+    client = MongitaClientDisk()
+    db = client["nosqldatabase"]
+    nosql_dir = Path("data/nosql")
+    if not nosql_dir.exists():
+        return db
+    for file in nosql_dir.glob("*.json"):
+        collection_name = file.stem.replace('.', '_')
+        collection = db[collection_name]
+        if collection.count_documents({}) == 0:
+            with open(file, "r", encoding="utf-8") as f:
+                try:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        collection.insert_many(data)
+                    else:
+                        collection.insert_one(data)
+                except Exception as e:
+                    print(f"Error loading {file}: {e}")
+    return db
 
 # ---------- streamlit ui ----------
 st.set_page_config(page_title="Bus Route & Arrivals Demo", layout="centered")
@@ -208,28 +226,59 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# --- section 2: live arrivals placeholder (NoSQL) ---
-# !! can change code below once you connect the no sql !!
-st.subheader("⏱️ Live Arrivals (Preview)")
-st.info("This section will later connect to the NoSQL (MongoDB) database. Below is a simulated example of the data structure.")
-st.code(
-    """{
-  "stop_id": "59051",
-  "route_no": "969",
-  "updated_at": "2025-10-21T09:15:00Z",
-  "arrivals": [
-    {"eta_min": 3, "status": "on-time"},
-    {"eta_min": 12}
-  ],
-  "alerts": [{"type": "crowd", "msg": "High load"}]
-}""",
-    language="json"
-)
-st.caption("For final demo, this will show live arrivals fetched from MongoDB and merged visually with route info above.")
+
+# --- section 2: live arrivals (NoSQL) ---
+st.subheader("⏱️ Live Arrivals (NoSQL)")
+db = load_nosql_data()
+collection_names = list(db.list_collection_names())
+if not collection_names:
+    st.warning("No NoSQL collections found. Place JSON files in data/nosql/.")
+else:
+    # Always use the first collection, no selectbox
+    collection_name = collection_names[0]
+    collection = db[collection_name]
+    # Simple query UI: filter by bus stop code
+    query_type = st.radio("Query by", ["bus_stop_code"], horizontal=True)
+    query = {}
+    if query_type == "bus_stop_code":
+        stop_code = st.text_input("Enter bus stop code")
+        if stop_code:
+            query["bus_stop_code"] = stop_code
+
+    # Query and display
+    if st.button("Search"):
+        results = list(collection.find(query))
+
+        if results:
+            st.write(f"Found {len(results)} records:")
+            display_rows = []
+            for rec in results:
+                service_no = rec.get("service_no", "-")
+                arrivals = rec.get("arrivals", [])
+                eta_list = []
+                for arr in arrivals:
+                    eta_str = arr.get("eta")
+                    if eta_str:
+                        try:
+                            import datetime
+                            t = datetime.datetime.fromisoformat(eta_str.replace("Z", "+00:00"))
+                            eta_fmt = t.strftime("%H:%M")
+                        except Exception:
+                            eta_fmt = eta_str
+                        eta_list.append(eta_fmt)
+                display_rows.append({
+                    "Service": service_no,
+                    "Arrivals": ", ".join(eta_list) if eta_list else "-"
+                })
+            if display_rows:
+                st.dataframe(pd.DataFrame(display_rows))
+            else:
+                st.info("No arrivals found for this stop.")
+        else:
+            st.info("No records found for your query.")
 
 # --- footer ---
 st.markdown(
     '<hr style="border:0;height:1px;background:linear-gradient(90deg,transparent,#59C3C3,transparent);margin-top:2rem;">',
     unsafe_allow_html=True
 )
-st.caption(f"Database: {os.path.abspath(DB_PATH)}")
