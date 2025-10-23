@@ -12,7 +12,7 @@ data/raw/
 data/fares/
 *.csv
 *.parquet
-*.json
+
 
 # ---- Secrets ----
 .env
