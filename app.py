@@ -93,6 +93,19 @@ def get_conn():
     conn.row_factory = sqlite3.Row
     return conn
 
+def init_favourites_table(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS favourites (
+            fav_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rider_type TEXT,
+            pay_mode TEXT,
+            from_stop TEXT,
+            to_stop TEXT,
+            nickname TEXT
+        );
+    """)
+    conn.commit()
+
 @st.cache_data(show_spinner=False)
 def load_stops():
     conn = get_conn()                     # <-- get resource here
@@ -111,6 +124,36 @@ def query_direct(conn, rider, mode, from_code, to_code):
     params = (rider, mode, from_code, to_code, from_code, to_code)
     df = pd.read_sql_query(DIRECT_SQL, conn, params=params)
     return df
+
+# -------------------------------------------
+# FAVOURITES CRUD HELPERS (SQLite)
+# -------------------------------------------
+
+def create_favourite(conn, rider, mode, from_code, to_code, nickname):
+    conn.execute(
+        "INSERT INTO favourites (rider_type, pay_mode, from_stop, to_stop, nickname) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (rider, mode, from_code, to_code, nickname),
+    )
+    conn.commit()
+
+def read_favourites(conn):
+    return pd.read_sql_query(
+        "SELECT fav_id, rider_type, pay_mode, from_stop, to_stop, nickname "
+        "FROM favourites ORDER BY fav_id",
+        conn,
+    )
+
+def update_favourite(conn, fav_id, nickname):
+    conn.execute(
+        "UPDATE favourites SET nickname = ? WHERE fav_id = ?",
+        (nickname, fav_id),
+    )
+    conn.commit()
+
+def delete_favourite(conn, fav_id):
+    conn.execute("DELETE FROM favourites WHERE fav_id = ?", (fav_id,))
+    conn.commit()
 
 # add your nosql functions here, for example
 # --- NoSQL (Mongita) Setup ---
@@ -164,15 +207,50 @@ st.markdown(
 # --- section 1: direct route finder (SQL) ---
 st.subheader("🚌 Direct Route Finder (SQL)")
 conn = get_conn()
+init_favourites_table(conn)
 stops = load_stops()
+label_by_code = dict(zip(stops["bus_stop_code"], stops["label"]))
+
+# If a favourite was requested, pre-fill widget state before widgets are created
+pending = st.session_state.get("pending_favourite")
+if pending:
+    st.session_state["rider_select"] = pending["rider"]
+    st.session_state["mode_select"] = pending["mode"]
+    st.session_state["from_select"] = label_by_code.get(
+        pending["from_code"],
+        pending["from_code"],
+    )
+    st.session_state["to_select"] = label_by_code.get(
+        pending["to_code"],
+        pending["to_code"],
+    )
+    # clear after consuming
+    del st.session_state["pending_favourite"]
 
 c1, c2 = st.columns(2)
-rider = c1.selectbox("Rider type", ["adult", "senior", "student", "workfare"])
-mode = c2.selectbox("Payment mode", ["card", "cash"])
+rider = c1.selectbox(
+    "Rider type",
+    ["adult", "senior", "student", "workfare"],
+    key="rider_select",
+)
+mode = c2.selectbox(
+    "Payment mode",
+    ["card", "cash"],
+    key="mode_select",
+)
 
 c3, c4 = st.columns(2)
-from_stop = c3.selectbox("From stop", stops["label"].tolist())
-to_stop = c4.selectbox("To stop", stops["label"].tolist(), index=min(1, len(stops)-1))
+from_stop = c3.selectbox(
+    "From stop",
+    stops["label"].tolist(),
+    key="from_select",
+)
+to_stop = c4.selectbox(
+    "To stop",
+    stops["label"].tolist(),
+    index=min(1, len(stops) - 1),
+    key="to_select",
+)
 from_code = from_stop.split(" — ", 1)[0]
 to_code = to_stop.split(" — ", 1)[0]
 
@@ -180,7 +258,7 @@ to_code = to_stop.split(" — ", 1)[0]
 # --- Store and display SQL results ---
 if "sql_results" not in st.session_state:
     st.session_state["sql_results"] = None
-if st.button("Search direct routes"):
+if st.button("Search direct routes", type="primary"):
     with st.spinner("Querying database..."):
         df = query_direct(conn, rider, mode, from_code, to_code)
     if df.empty:
@@ -248,12 +326,131 @@ if st.session_state.get("sql_results"):
     )
     st.dataframe(res["df"], hide_index=True, use_container_width=True)
 
+    # --- FAVOURITES UI (under table) ---
+    st.markdown("### ⭐ Save this route")
+
+    nick = st.text_input(
+        "Route nickname:",
+        placeholder="e.g. Work → Home",
+        key="fav_nickname",
+    )
+
+    if st.button("Save to favourites", type="primary"):
+        if not nick.strip():
+            st.warning("Please enter a nickname before saving.")
+        else:
+            create_favourite(
+                conn,
+                res["rider"],
+                res["mode"],
+                res["from_code"],
+                res["to_code"],
+                nick.strip(),
+            )
+            st.success("Saved to favourites!")
+            st.rerun()
+
+st.markdown("### ⭐ Your favourites")
+fav_df = read_favourites(conn)
+
+if fav_df.empty:
+    st.info("No favourites saved yet.")
+else:
+    for _, row in fav_df.iterrows():
+        # layout: name | from | to | load | save | delete
+        c1, c2, c3, c4, c5, c6 = st.columns([2.5, 1.5, 1.5, 2.2, 1.2, 1.2])
+
+        with c1:
+            st.write(f"**{row['nickname']}**")
+
+        with c2:
+            st.write(f"From: `{row['from_stop']}`")
+
+        with c3:
+            st.write(f"To: `{row['to_stop']}`")
+
+        # rename field
+        with c4:
+            new_name = st.text_input(
+                "Rename",
+                value=row["nickname"],
+                key=f"rename_{row['fav_id']}",
+            )
+
+        # Save rename
+        with c5:
+            if st.button("Save", key=f"save_{row['fav_id']}", type="primary"):
+                update_favourite(conn, row["fav_id"], new_name.strip())
+                st.success("Updated!")
+                st.rerun()
+
+        # Load favourite into search + run query
+        with c6:
+            if st.button("Load", key=f"load_{row['fav_id']}", type="primary"):
+                # 1) tell the next run what to pre-fill
+                st.session_state["pending_favourite"] = {
+                    "rider": row["rider_type"],
+                    "mode": row["pay_mode"],
+                    "from_code": row["from_stop"],
+                    "to_code": row["to_stop"],
+                }
+
+                # 2) run the SQL query for this favourite and store results
+                df = query_direct(
+                    conn,
+                    row["rider_type"],
+                    row["pay_mode"],
+                    row["from_stop"],
+                    row["to_stop"],
+                )
+                if df.empty:
+                    st.session_state["sql_results"] = None
+                else:
+                    best_fare = df["fare"].str.replace("$", "").astype(float).min()
+                    best_eta = df["est_minutes"].min()
+                    services = df["service_no"].nunique()
+                    operators = df["operator"].nunique()
+
+                    st.session_state["sql_results"] = {
+                        "df": df.drop(columns=["category"], errors="ignore").rename(
+                            columns={
+                                "service_no": "Service",
+                                "direction": "Dir",
+                                "operator": "Operator",
+                                "from_stop": "From",
+                                "to_stop": "To",
+                                "hops": "Hops",
+                                "travel_km": "Km",
+                                "est_minutes": "ETA (min)",
+                                "fare": "Fare",
+                                "fare_source": "Fare source",
+                            }
+                        ),
+                        "best_fare": best_fare,
+                        "best_eta": best_eta,
+                        "services": services,
+                        "operators": operators,
+                        "from_code": row["from_stop"],
+                        "to_code": row["to_stop"],
+                        "rider": row["rider_type"],
+                        "mode": row["pay_mode"],
+                    }
+
+                # 3) rerun so the pre-fill hook at the top is executed
+                st.rerun()
+
+        # Delete button with secondary type
+        delete_col = st.columns([1, 1, 1, 1, 1, 1])[5]
+        with delete_col:
+            if st.button("Delete", key=f"delete_{row['fav_id']}", type="secondary"):
+                delete_favourite(conn, row["fav_id"])
+                st.rerun()
+
 # divider
 st.markdown(
     '<hr style="border:0;height:1px;background:linear-gradient(90deg,transparent,#FF6BA3,transparent);margin:2rem 0;">',
     unsafe_allow_html=True
 )
-
 
 # --- section 2: live arrivals (NoSQL) ---
 st.subheader("⏱️ Live Arrivals (NoSQL)")
@@ -325,7 +522,7 @@ else:
 # --- Store and display NoSQL results ---
 if "nosql_results" not in st.session_state:
     st.session_state["nosql_results"] = None
-if st.button("Search"):
+if st.button("Search", type="primary"):
     results = list(collection.find(query))
     if results:
         # Get active reports to check for warnings

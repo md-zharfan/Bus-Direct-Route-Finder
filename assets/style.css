@@ -231,3 +231,51 @@ hr { border-color: var(--border); opacity: .5; }
 .chip .tag{ color: var(--muted); margin-right: 6px; }
 .spacer-8{ height:8px; }
 .spacer-16{ height:16px; }
+
+/* Style all Delete buttons with orange color */
+div[data-testid^="stButton_delete_"] button,
+button[key*="delete_"] {
+    background-color: #ff8c42 !important;  /* Orange color */
+    color: white !important;
+    border: none !important;
+    border-radius: 12px !important;
+    padding: 0.6rem 1.2rem !important;
+    font-weight: 600 !important;
+}
+
+div[data-testid^="stButton_delete_"] button:hover,
+button[key*="delete_"]:hover {
+    background-color: #ff7324 !important;  /* Darker orange on hover */
+    transform: translateY(-1px);
+    box-shadow: 0 10px 20px rgba(255, 140, 66, 0.3);
+}
+
+/* Style all Delete buttons with orange color */
+button[kind="secondary"] {
+    background: linear-gradient(180deg, #ff8c42, #ff6b35) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 12px !important;
+    padding: 0.6rem 1.2rem !important;
+    font-weight: 600 !important;
+    box-shadow: 0 6px 16px rgba(255, 107, 53, 0.4) !important;
+    transition: all 0.15s ease !important;
+}
+
+button[kind="secondary"]:hover {
+    background: linear-gradient(180deg, #ff7324, #ff5722) !important;
+    transform: translateY(-1px) !important;
+    box-shadow: 0 10px 20px rgba(255, 107, 53, 0.5) !important;
+    filter: brightness(1.05) !important;
+}
+
+/* Make rename input boxes wider */
+.stTextInput input {
+    min-width: 250px !important;
+    width: 100% !important;
+}
+
+/* If you want to target ONLY the rename inputs in the favourites section */
+div[data-testid="column"] .stTextInput input {
+    min-width: 280px !important;
+}
