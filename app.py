@@ -267,7 +267,7 @@ to_code = to_stop.split(" — ", 1)[0]
 # --- Store and display SQL results ---
 if "sql_results" not in st.session_state:
     st.session_state["sql_results"] = None
-if st.button("Search direct routes"):
+if st.button("Search direct routes", type="primary"):
     with st.spinner("Querying database..."):
         df = query_direct(conn, rider, mode, from_code, to_code)
     if df.empty:
@@ -346,7 +346,7 @@ if st.session_state.get("sql_results"):
         key="fav_nickname",
     )
 
-    if st.button("Save to favourites"):
+    if st.button("Save to favourites", type="primary"):
         if not nick.strip():
             st.warning("Please enter a nickname before saving.")
         else:
@@ -369,7 +369,7 @@ if fav_df.empty:
 else:
     for _, row in fav_df.iterrows():
         # layout: name | from | to | load | save | delete
-        c1, c2, c3, c4, c5, c6 = st.columns([3, 2, 2, 1.2, 1.2, 1.2])
+        c1, c2, c3, c4, c5, c6 = st.columns([2.5, 1.5, 1.5, 2.2, 1.2, 1.2])
 
         with c1:
             st.write(f"**{row['nickname']}**")
@@ -390,14 +390,14 @@ else:
 
         # Save rename
         with c5:
-            if st.button("Save", key=f"save_{row['fav_id']}"):
+            if st.button("Save", key=f"save_{row['fav_id']}", type="primary"):
                 update_favourite(conn, row["fav_id"], new_name.strip())
                 st.success("Updated!")
                 st.rerun()
 
         # Load favourite into search + run query
         with c6:
-            if st.button("Load", key=f"load_{row['fav_id']}"):
+            if st.button("Load", key=f"load_{row['fav_id']}", type="primary"):
                 # 1) tell the next run what to pre-fill
                 st.session_state["pending_favourite"] = {
                     "rider": row["rider_type"],
@@ -451,10 +451,10 @@ else:
                 st.rerun()
 
 
-        # Delete button on its own line (for clarity)
+        # Delete button with secondary type
         delete_col = st.columns([1, 1, 1, 1, 1, 1])[5]
         with delete_col:
-            if st.button("Delete", key=f"del_{row['fav_id']}"):
+            if st.button("Delete", key=f"delete_{row['fav_id']}", type="secondary"):
                 delete_favourite(conn, row["fav_id"])
                 st.rerun()
 
@@ -500,7 +500,7 @@ else:
 # --- Store and display NoSQL results ---
 if "nosql_results" not in st.session_state:
     st.session_state["nosql_results"] = None
-if st.button("Search"):
+if st.button("Search", type="primary"):
     results = list(collection.find(query))
     if results:
         display_rows = []
