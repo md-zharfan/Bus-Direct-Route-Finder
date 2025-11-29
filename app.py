@@ -114,6 +114,7 @@ def query_direct(conn, rider, mode, from_code, to_code):
 
 # add your nosql functions here, for example
 # --- NoSQL (Mongita) Setup ---
+@st.cache_resource(show_spinner=False)
 def load_nosql_data():
     import traceback
     db_path = os.path.join("data", "nosql")
@@ -264,9 +265,9 @@ else:
     # Always use the first collection, no selectbox
     collection_name = collection_names[0]
     collection = db[collection_name]
-    # Simple query UI: filter by bus stop code
-    query_type = st.radio("Query by", ["bus_stop_code"], horizontal=True)
+    # Simple query UI: filter by bus stop code and operator
     query = {}
+    
     # Get all unique bus stop codes from the collection
     all_codes = collection.distinct("bus_stop_code")
     all_codes = sorted([c for c in all_codes if c])
@@ -278,10 +279,46 @@ else:
     except Exception:
         pass
     options = [f"{code} — {stop_labels.get(code, '')}".strip() for code in all_codes]
-    selected = st.selectbox("Select bus stop", options) if options else ""
-    stop_code = selected.split(" — ", 1)[0] if selected else ""
-    if stop_code:
-        query["bus_stop_code"] = stop_code
+    
+    # Get all unique operators from the collection
+    all_operators = collection.distinct("operator")
+    all_operators = sorted([op for op in all_operators if op])
+    
+    # UI: four columns for bus stop, service, operator, and bus type selection
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        selected = st.selectbox("Select bus stop", options) if options else ""
+        stop_code = selected.split(" — ", 1)[0] if selected else ""
+        if stop_code:
+            query["bus_stop_code"] = stop_code
+    
+    with col2:
+        # Get services only for the selected bus stop
+        if stop_code:
+            stop_services = collection.distinct("service_no", {"bus_stop_code": stop_code})
+            stop_services = sorted([svc for svc in stop_services if svc])
+            service_options = ["All services"] + stop_services
+        else:
+            service_options = ["All services"]
+        selected_service = st.selectbox("Select service", service_options)
+        if selected_service != "All services":
+            query["service_no"] = selected_service
+    
+    with col3:
+        operator_options = ["All operators"] + all_operators
+        selected_operator = st.selectbox("Select operator", operator_options)
+        if selected_operator != "All operators":
+            query["operator"] = selected_operator
+    
+    with col4:
+        bus_type_options = ["All types", "DD (Double Decker)", "SD (Single Decker)"]
+        selected_bus_type = st.selectbox("Select bus type", bus_type_options)
+        # Parse the bus type code from selection
+        bus_type_filter = None
+        if selected_bus_type == "DD (Double Decker)":
+            bus_type_filter = "DD"
+        elif selected_bus_type == "SD (Single Decker)":
+            bus_type_filter = "SD"
 
     # Query and display
 
@@ -295,9 +332,20 @@ if st.button("Search"):
         for rec in results:
             service_no = rec.get("service_no", "-")
             arrivals = rec.get("arrivals", [])
+            
+            # Filter arrivals by bus type if specified
+            if bus_type_filter:
+                arrivals = [arr for arr in arrivals if arr.get("type") == bus_type_filter]
+            
+            # Skip this record if no arrivals match the filter
+            if not arrivals:
+                continue
+            
             eta_list = []
+            type_list = []
             for arr in arrivals:
                 eta_str = arr.get("eta")
+                bus_type = arr.get("type", "-")
                 if eta_str:
                     try:
                         import datetime
@@ -305,12 +353,12 @@ if st.button("Search"):
                         eta_fmt = t.strftime("%H:%M")
                     except Exception:
                         eta_fmt = eta_str
-                    eta_list.append(eta_fmt)
+                    eta_list.append(f"{eta_fmt} ({bus_type})")
             display_rows.append({
                 "Service": service_no,
                 "Arrivals": ", ".join(eta_list) if eta_list else "-"
             })
-        st.session_state["nosql_results"] = pd.DataFrame(display_rows)
+        st.session_state["nosql_results"] = pd.DataFrame(display_rows) if display_rows else None
     else:
         st.session_state["nosql_results"] = None
 
