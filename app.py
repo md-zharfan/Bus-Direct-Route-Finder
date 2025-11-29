@@ -157,6 +157,7 @@ def delete_favourite(conn, fav_id):
 
 # add your nosql functions here, for example
 # --- NoSQL (Mongita) Setup ---
+@st.cache_resource(show_spinner=False)
 def load_nosql_data():
     import traceback
     db_path = os.path.join("data", "nosql")
@@ -461,9 +462,9 @@ else:
     # Always use the first collection, no selectbox
     collection_name = collection_names[0]
     collection = db[collection_name]
-    # Simple query UI: filter by bus stop code
-    query_type = st.radio("Query by", ["bus_stop_code"], horizontal=True)
+    # Simple query UI: filter by bus stop code and operator
     query = {}
+    
     # Get all unique bus stop codes from the collection
     all_codes = collection.distinct("bus_stop_code")
     all_codes = sorted([c for c in all_codes if c])
@@ -475,10 +476,46 @@ else:
     except Exception:
         pass
     options = [f"{code} — {stop_labels.get(code, '')}".strip() for code in all_codes]
-    selected = st.selectbox("Select bus stop", options) if options else ""
-    stop_code = selected.split(" — ", 1)[0] if selected else ""
-    if stop_code:
-        query["bus_stop_code"] = stop_code
+    
+    # Get all unique operators from the collection
+    all_operators = collection.distinct("operator")
+    all_operators = sorted([op for op in all_operators if op])
+    
+    # UI: four columns for bus stop, service, operator, and bus type selection
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        selected = st.selectbox("Select bus stop", options) if options else ""
+        stop_code = selected.split(" — ", 1)[0] if selected else ""
+        if stop_code:
+            query["bus_stop_code"] = stop_code
+    
+    with col2:
+        # Get services only for the selected bus stop
+        if stop_code:
+            stop_services = collection.distinct("service_no", {"bus_stop_code": stop_code})
+            stop_services = sorted([svc for svc in stop_services if svc])
+            service_options = ["All services"] + stop_services
+        else:
+            service_options = ["All services"]
+        selected_service = st.selectbox("Select service", service_options)
+        if selected_service != "All services":
+            query["service_no"] = selected_service
+    
+    with col3:
+        operator_options = ["All operators"] + all_operators
+        selected_operator = st.selectbox("Select operator", operator_options)
+        if selected_operator != "All operators":
+            query["operator"] = selected_operator
+    
+    with col4:
+        bus_type_options = ["All types", "DD (Double Decker)", "SD (Single Decker)"]
+        selected_bus_type = st.selectbox("Select bus type", bus_type_options)
+        # Parse the bus type code from selection
+        bus_type_filter = None
+        if selected_bus_type == "DD (Double Decker)":
+            bus_type_filter = "DD"
+        elif selected_bus_type == "SD (Single Decker)":
+            bus_type_filter = "SD"
 
     # Query and display
 
@@ -488,13 +525,37 @@ if "nosql_results" not in st.session_state:
 if st.button("Search", type="primary"):
     results = list(collection.find(query))
     if results:
+        # Get active reports to check for warnings
+        reports_collection = db["user_reports"]
+        active_reports = list(reports_collection.find({"status": "active"}))
+        
+        # Create a lookup for reports by service+stop+timing
+        report_lookup = {}
+        for report in active_reports:
+            key = f"{report.get('service_no')}_{report.get('bus_stop_code')}_{report.get('bus_timing', '')}"
+            if key not in report_lookup:
+                report_lookup[key] = []
+            report_lookup[key].append(report)
+        
         display_rows = []
         for rec in results:
             service_no = rec.get("service_no", "-")
+            stop_code = rec.get("bus_stop_code", "-")
             arrivals = rec.get("arrivals", [])
+            
+            # Filter arrivals by bus type if specified
+            if bus_type_filter:
+                arrivals = [arr for arr in arrivals if arr.get("type") == bus_type_filter]
+            
+            # Skip this record if no arrivals match the filter
+            if not arrivals:
+                continue
+            
             eta_list = []
+            warning_texts = []
             for arr in arrivals:
                 eta_str = arr.get("eta")
+                bus_type = arr.get("type", "-")
                 if eta_str:
                     try:
                         import datetime
@@ -502,18 +563,326 @@ if st.button("Search", type="primary"):
                         eta_fmt = t.strftime("%H:%M")
                     except Exception:
                         eta_fmt = eta_str
-                    eta_list.append(eta_fmt)
+                    
+                    # Check for reports specific to this timing
+                    report_key = f"{service_no}_{stop_code}_{eta_fmt}"
+                    timing_warnings = ""
+                    if report_key in report_lookup:
+                        reports_for_timing = report_lookup[report_key]
+                        icons = []
+                        for rpt in reports_for_timing:
+                            issue = rpt.get("issue_type", "")
+                            # Extract emoji from issue type
+                            if "🚌" in issue:
+                                icons.append("🚌")
+                            elif "⏰" in issue:
+                                icons.append("⏰")
+                            elif "❌" in issue:
+                                icons.append("❌")
+                            elif "♿" in issue:
+                                icons.append("♿")
+                            elif "🚫" in issue:
+                                icons.append("🚫")
+                            elif "🛑" in issue:
+                                icons.append("🛑")
+                        if icons:
+                            timing_warnings = "".join(set(icons))
+                    
+                    eta_list.append(f"{eta_fmt} ({bus_type}) {timing_warnings}")
+            
+            # Collect all warning descriptions for this service
+            all_warnings_for_service = []
+            for key, reports in report_lookup.items():
+                if key.startswith(f"{service_no}_{stop_code}_"):
+                    for rpt in reports:
+                        issue = rpt.get("issue_type", "")
+                        # Extract readable text
+                        if "Bus is full" in issue:
+                            all_warnings_for_service.append("Bus is full")
+                        elif "delayed" in issue:
+                            all_warnings_for_service.append("Bus delayed")
+                        elif "skipped" in issue:
+                            all_warnings_for_service.append("Skipped stop")
+                        elif "Wheelchair" in issue:
+                            all_warnings_for_service.append("Wheelchair lift broken")
+                        elif "unavailable" in issue:
+                            all_warnings_for_service.append("Service unavailable")
+                        elif "breakdown" in issue:
+                            all_warnings_for_service.append("Breakdown/accident")
+            
             display_rows.append({
                 "Service": service_no,
-                "Arrivals": ", ".join(eta_list) if eta_list else "-"
+                "Arrivals": ", ".join(eta_list) if eta_list else "-",
+                "Warnings": ", ".join(set(all_warnings_for_service)) if all_warnings_for_service else "-"
             })
-        st.session_state["nosql_results"] = pd.DataFrame(display_rows)
+        st.session_state["nosql_results"] = pd.DataFrame(display_rows) if display_rows else None
     else:
         st.session_state["nosql_results"] = None
 
 if st.session_state.get("nosql_results") is not None:
     st.write(f"Found {len(st.session_state['nosql_results'])} records:")
-    st.dataframe(st.session_state["nosql_results"], hide_index=True)
+    st.dataframe(st.session_state["nosql_results"], hide_index=True, use_container_width=True)
+    
+    # Show legend for warning icons
+    st.caption("⚠️ Warning icons: 🚌 Full | ⏰ Delayed | ❌ Skipped | ♿ Wheelchair lift broken | 🚫 Unavailable | 🛑 Breakdown")
+
+# divider
+st.markdown(
+    '<hr style="border:0;height:1px;background:linear-gradient(90deg,transparent,#FF6BA3,transparent);margin:2rem 0;">',
+    unsafe_allow_html=True
+)
+
+# --- section 3: Community Reports (Waze-style) ---
+st.subheader("📢 Community Reports")
+st.caption("Help other commuters by reporting real-time bus conditions")
+
+report_tab1, report_tab2, report_tab3 = st.tabs(["🚨 Report Issue", "✏️ Update Report", "🗑️ Clear Report"])
+
+with report_tab1:
+    st.markdown("**Report a bus service issue**")
+    
+    # Get all available stops from the collection
+    all_report_stops = collection.distinct("bus_stop_code")
+    all_report_stops = sorted([stop for stop in all_report_stops if stop])
+    
+    report_col1, report_col2 = st.columns(2)
+    with report_col1:
+        report_stop = st.selectbox("Bus stop code", all_report_stops, key="report_stop")
+        
+        # Get services only for the selected bus stop
+        if report_stop:
+            stop_services = collection.distinct("service_no", {"bus_stop_code": report_stop})
+            stop_services = sorted([svc for svc in stop_services if svc])
+            if stop_services:
+                report_service = st.selectbox("Bus service number", stop_services, key="report_service")
+            else:
+                st.warning("No services found for this stop")
+                report_service = None
+        else:
+            report_service = None
+        
+        # Get available timings for selected service and stop
+        if report_service and report_stop:
+            timing_record = collection.find_one({"service_no": report_service, "bus_stop_code": report_stop})
+            available_timings = []
+            if timing_record and timing_record.get("arrivals"):
+                for arr in timing_record.get("arrivals", []):
+                    eta_str = arr.get("eta")
+                    if eta_str:
+                        try:
+                            import datetime
+                            t = datetime.datetime.fromisoformat(eta_str.replace("Z", "+00:00"))
+                            available_timings.append(t.strftime("%H:%M"))
+                        except Exception:
+                            pass
+            if available_timings:
+                report_timing = st.selectbox("Bus timing", available_timings, key="report_timing")
+            else:
+                st.warning("No arrivals found for this service/stop combination")
+                report_timing = None
+        else:
+            report_timing = None
+    
+    with report_col2:
+        report_type = st.selectbox(
+            "Issue type",
+            [
+                "🚌 Bus is full (no space)",
+                "⏰ Bus delayed (>10 min late)",
+                "❌ Bus skipped this stop",
+                "♿ Wheelchair lift broken",
+                "🚫 Service temporarily unavailable",
+                "🛑 Bus breakdown/accident"
+            ],
+            key="report_type"
+        )
+    
+    if st.button("Submit Report", type="primary", key="submit_report"):
+        if report_service and report_stop and report_timing:
+            import datetime
+            # Create a report document in a separate 'reports' collection
+            reports_collection = db["user_reports"]
+            new_report = {
+                "service_no": report_service,
+                "bus_stop_code": report_stop,
+                "bus_timing": report_timing,
+                "issue_type": report_type,
+                "reported_at": datetime.datetime.now().isoformat(),
+                "status": "active"
+            }
+            reports_collection.insert_one(new_report)
+            st.success(f"✅ Report submitted for service {report_service} at {report_timing}. Thanks for helping the community!")
+        else:
+            st.error("Please select Service, Stop, and Bus timing")
+
+with report_tab2:
+    st.markdown("**Update issue type for existing report**")
+    
+    # Get all available stops from the collection
+    all_update_stops = collection.distinct("bus_stop_code")
+    all_update_stops = sorted([stop for stop in all_update_stops if stop])
+    
+    update_col1, update_col2 = st.columns(2)
+    with update_col1:
+        update_stop = st.selectbox("Bus stop code", all_update_stops, key="update_stop")
+        
+        # Get services only for the selected bus stop
+        if update_stop:
+            update_stop_services = collection.distinct("service_no", {"bus_stop_code": update_stop})
+            update_stop_services = sorted([svc for svc in update_stop_services if svc])
+            if update_stop_services:
+                update_service = st.selectbox("Bus service number", update_stop_services, key="update_service")
+            else:
+                st.warning("No services found for this stop")
+                update_service = None
+        else:
+            update_service = None
+        
+        # Get available timings for selected service and stop
+        if update_service and update_stop:
+            update_timing_record = collection.find_one({"service_no": update_service, "bus_stop_code": update_stop})
+            update_available_timings = []
+            if update_timing_record and update_timing_record.get("arrivals"):
+                for arr in update_timing_record.get("arrivals", []):
+                    eta_str = arr.get("eta")
+                    if eta_str:
+                        try:
+                            import datetime
+                            t = datetime.datetime.fromisoformat(eta_str.replace("Z", "+00:00"))
+                            update_available_timings.append(t.strftime("%H:%M"))
+                        except Exception:
+                            pass
+            if update_available_timings:
+                update_timing = st.selectbox("Bus timing", update_available_timings, key="update_timing")
+            else:
+                st.warning("No arrivals found for this service/stop combination")
+                update_timing = None
+        else:
+            update_timing = None
+    
+    with update_col2:
+        new_issue_type = st.selectbox(
+            "Update to issue type",
+            [
+                "🚌 Bus is full (no space)",
+                "⏰ Bus delayed (>10 min late)",
+                "❌ Bus skipped this stop",
+                "♿ Wheelchair lift broken",
+                "🚫 Service temporarily unavailable",
+                "🛑 Bus breakdown/accident"
+            ],
+            key="new_issue_type"
+        )
+    
+    if st.button("Update Issue Type", type="primary", key="update_issue"):
+        if update_service and update_stop and update_timing:
+            # Find the specific report for this service, stop, and timing
+            reports_collection = db["user_reports"]
+            result = reports_collection.update_many(
+                {
+                    "service_no": update_service,
+                    "bus_stop_code": update_stop,
+                    "bus_timing": update_timing,
+                    "status": "active"
+                },
+                {"$set": {"issue_type": new_issue_type}}
+            )
+            if result.modified_count > 0:
+                st.success(f"✅ Updated issue type for service {update_service} at {update_timing}. Thanks for the update!")
+            else:
+                st.warning("No active reports found to update. You may need to report this bus first.")
+        else:
+            st.error("Please select Service, Stop, and Bus timing")
+
+with report_tab3:
+    st.markdown("**Clear/resolve a previously submitted report**")
+    st.info("💡 Use this when an issue has been resolved (e.g., delayed bus has arrived)")
+    
+    # Get all available stops from the collection
+    all_clear_stops = collection.distinct("bus_stop_code")
+    all_clear_stops = sorted([stop for stop in all_clear_stops if stop])
+    
+    delete_col1, delete_col2 = st.columns(2)
+    with delete_col1:
+        clear_stop = st.selectbox("Bus stop code", all_clear_stops, key="clear_stop")
+        
+        # Get services only for the selected bus stop
+        if clear_stop:
+            clear_stop_services = collection.distinct("service_no", {"bus_stop_code": clear_stop})
+            clear_stop_services = sorted([svc for svc in clear_stop_services if svc])
+            if clear_stop_services:
+                clear_service = st.selectbox("Bus service number", clear_stop_services, key="clear_service")
+            else:
+                st.warning("No services found for this stop")
+                clear_service = None
+        else:
+            clear_service = None
+        
+        # Get available timings for selected service and stop
+        if clear_service and clear_stop:
+            clear_timing_record = collection.find_one({"service_no": clear_service, "bus_stop_code": clear_stop})
+            clear_available_timings = []
+            if clear_timing_record and clear_timing_record.get("arrivals"):
+                for arr in clear_timing_record.get("arrivals", []):
+                    eta_str = arr.get("eta")
+                    if eta_str:
+                        try:
+                            import datetime
+                            t = datetime.datetime.fromisoformat(eta_str.replace("Z", "+00:00"))
+                            clear_available_timings.append(t.strftime("%H:%M"))
+                        except Exception:
+                            pass
+            if clear_available_timings:
+                clear_timing = st.selectbox("Bus timing", clear_available_timings, key="clear_timing")
+            else:
+                st.warning("No arrivals found for this service/stop combination")
+                clear_timing = None
+        else:
+            clear_timing = None
+    
+    with delete_col2:
+        clear_reason = st.selectbox(
+            "Reason for clearing",
+            ["✅ Issue resolved", "❌ False alarm", "🔄 Issue no longer relevant"],
+            key="clear_reason"
+        )
+    
+    if st.button("Clear Report", type="primary", key="clear_report"):
+        if clear_service and clear_stop and clear_timing:
+            reports_collection = db["user_reports"]
+            result = reports_collection.delete_many({
+                "service_no": clear_service,
+                "bus_stop_code": clear_stop,
+                "bus_timing": clear_timing,
+                "status": "active"
+            })
+            if result.deleted_count > 0:
+                st.success(f"✅ Cleared {result.deleted_count} report(s) for service {clear_service} at {clear_timing}. Thanks for keeping the community informed!")
+            else:
+                st.warning("No active reports found for this service/stop/timing.")
+        else:
+            st.error("Please select Service, Stop, and Bus timing")
+
+# Show recent community reports
+st.markdown("---")
+st.markdown("**📋 Recent Community Reports (Last 10)**")
+try:
+    reports_collection = db["user_reports"]
+    recent_reports = list(reports_collection.find({"status": "active"}).sort("reported_at", -1).limit(10))
+    if recent_reports:
+        report_display = []
+        for r in recent_reports:
+            report_display.append({
+                "Service": r.get("service_no"),
+                "Stop": r.get("bus_stop_code"),
+                "Issue": r.get("issue_type"),
+                "Time": r.get("reported_at", "")[:16].replace("T", " ") if r.get("reported_at") else "-"
+            })
+        st.dataframe(pd.DataFrame(report_display), hide_index=True, use_container_width=True)
+    else:
+        st.info("No active reports. The community will appreciate your reports!")
+except Exception as e:
+    st.warning("Could not load recent reports")
 
 # --- footer ---
 st.markdown(
