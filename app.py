@@ -226,16 +226,6 @@ if pending:
     # clear after consuming
     del st.session_state["pending_favourite"]
 
-# c1, c2 = st.columns(2)
-# rider = c1.selectbox("Rider type", ["adult", "senior", "student", "workfare"])
-# mode = c2.selectbox("Payment mode", ["card", "cash"])
-
-# c3, c4 = st.columns(2)
-# from_stop = c3.selectbox("From stop", stops["label"].tolist())
-# to_stop = c4.selectbox("To stop", stops["label"].tolist(), index=min(1, len(stops)-1))
-# from_code = from_stop.split(" — ", 1)[0]
-# to_code = to_stop.split(" — ", 1)[0]
-
 c1, c2 = st.columns(2)
 rider = c1.selectbox(
     "Rider type",
@@ -335,14 +325,12 @@ if st.session_state.get("sql_results"):
     )
     st.dataframe(res["df"], hide_index=True, use_container_width=True)
 
-    # ---------------------------
-    # FAVOURITES UI (under table)
-    # ---------------------------
+    # --- FAVOURITES UI (under table) ---
     st.markdown("### ⭐ Save this route")
 
     nick = st.text_input(
         "Route nickname:",
-        placeholder="e.g. Work → Home (969 + 858)",
+        placeholder="e.g. Work → Home",
         key="fav_nickname",
     )
 
@@ -450,7 +438,6 @@ else:
                 # 3) rerun so the pre-fill hook at the top is executed
                 st.rerun()
 
-
         # Delete button with secondary type
         delete_col = st.columns([1, 1, 1, 1, 1, 1])[5]
         with delete_col:
@@ -458,13 +445,11 @@ else:
                 delete_favourite(conn, row["fav_id"])
                 st.rerun()
 
-
 # divider
 st.markdown(
     '<hr style="border:0;height:1px;background:linear-gradient(90deg,transparent,#FF6BA3,transparent);margin:2rem 0;">',
     unsafe_allow_html=True
 )
-
 
 # --- section 2: live arrivals (NoSQL) ---
 st.subheader("⏱️ Live Arrivals (NoSQL)")
